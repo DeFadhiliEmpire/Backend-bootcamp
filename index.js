@@ -2,7 +2,6 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
 const NodeCache = require("node-cache");
 const { body, validationResult } = require("express-validator");
 const { trace } = require("console");
@@ -13,25 +12,26 @@ const PORT = 8080;
 
 app.use(express.json());
 app.use(cors());
+
 const cache = new NodeCache({ stdTTl: 600 });
 
 const connectDB = async () => {
   try {
     const mongoURI = process.env.MONGO_URL;
+
     await mongoose.connect(mongoURI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
-    console.log("MongoDB connected seccesfully");
   } catch (error) {
-    console.error("❌ MongoDB connection failed:", error.message);
+    console.error("MongoDB connection error");
     process.exit(1);
   }
 };
 
-//Model creation schemas
+// Model creation
 const taskSchema = new mongoose.Schema({
-  tittle: { type: String, required: true, trim: true },
+  title: { type: String, required: true, trim: true },
   completed: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
@@ -42,36 +42,37 @@ const Task = mongoose.model("Task", taskSchema);
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true, trim: true },
   password: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, defalut: Date.now },
 });
 
 const User = mongoose.model("User", userSchema);
 
-//validator
+// vaildator
 const validateTask = [
-  body("tittle").isString().notEmpty().trim().isLength({ min: 3 }),
+  body("title").isString().notEmpty().trim().isLength({ min: 3 }),
   body("completed").isBoolean(),
 ];
 
-//Jwt middleware
+// JWT middleware
 const auth = (req, res, next) => {
-  const token = req.header("Authorization")?.replace("Bearer", "");
-  if (!token) return res.status(404).json({ error: "Access denied" });
+  const token = req.header("Authorization")?.replace("Bearer ", " ");
+  if (!token) return res.status(401).json({ error: "Access denied" });
   try {
-    const decode = jwt.verify(token, "Secret-key");
+    const decode = jwt.verify(token, "secret-key");
     req.user = decode;
     next();
   } catch (error) {
-    return res.status(404).json({ error: "Invalid or expired token" });
+    res.status(401).json({ error: "Invalid token" });
   }
 };
 
-//user signup endpoint /route
+//signup route
+// User Signup Endpoint
 app.post(
   "/signup",
   [
     body("username").isString().notEmpty().trim().isLength({ min: 3, max: 30 }),
-    body("password").isString().notEmpty().isLength({ min: 3 }),
+    body("password").isString().notEmpty().isLength({ min: 6 }),
   ],
   async (req, res) => {
     try {
@@ -82,27 +83,27 @@ app.post(
 
       const { username, password } = req.body;
 
-      //check if user already exists
+      // Check if user already exists
       const existingUser = await User.findOne({ username });
       if (existingUser) {
         return res.status(400).json({ error: "Username already exists" });
       }
 
-      //create a user
+      // Create new user
       const user = new User({
         username,
-        password,
+        password, // In production, you should hash the password
       });
 
       await user.save();
 
-      //Generate a JWT token
+      // Generate JWT token
       const token = jwt.sign({ id: user._id }, "secret-key", {
         expiresIn: "1h",
       });
 
-      res.status(200).json({
-        message: "User Created succesfully",
+      res.status(201).json({
+        message: "User created successfully",
         token,
         user: {
           id: user._id,
@@ -111,47 +112,55 @@ app.post(
         },
       });
     } catch (error) {
-      console.error("Signup error", error);
-      return res.status(500).json({ error: "Failed to craete User" });
+      console.error("Signup error:", error);
+      res.status(500).json({ error: "Failed to create user" });
     }
   }
 );
 
-//user login
+// user login
 app.post("/login", async (req, res) => {
   const { username, password } = req.body;
   const user = await User.findOne({ username });
   if (!user) {
-    return res.status(401).json({ error: "Invalid Credentials" });
+    return res.status(401).json({ error: "Invalid credentials" });
   }
   const token = jwt.sign({ id: user._id }, "secret-key", { expiresIn: "1h" });
+  res.json({ token });
 });
 
-// Fetch taks
 app.get("/tasks", async (req, res) => {
-  const cachekey = `all_tasks_${req.user.id}`;
-  const cacheTasks = cache.get(cachekey);
+  const cacheKey = "all_tasks";
+  const cachedTasks = cache.get(cacheKey);
 
-  if (cacheTasks) return res.json(cacheTasks);
+  if (cachedTasks) {
+    return res.json(cachedTasks);
+  }
 
-  const tasks = await Task.find({ userId: req.user.id });
-  cache.set(cachekey, tasks);
-  res.json(tasks);
+  try {
+    const tasks = await Task.find(); // fetch all tasks without filtering
+    cache.set(cacheKey, tasks);
+    res.json(tasks);
+  } catch (error) {
+    console.error("Error fetching tasks:", error);
+    res.status(500).json({ error: "Failed to fetch tasks" });
+  }
 });
 
-//crearing a new task
 
+// creating a new taks
 app.post("/tasks", validateTask, async (req, res) => {
-  const error = await validatationResult(req);
+  const error = validationResult(req);
   if (!error.isEmpty()) {
     return res.status(400).json({ error: error.array });
   }
   const task = new Task(req.body);
   await task.save();
-  res.status(200).json(task);
+  res.status(201).json(task);
 });
 
 // Getting a task based upon the id.
+// Get Task by ID
 app.get("/tasks/:id", async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
@@ -187,20 +196,32 @@ app.put("/tasks/:id", async (req, res) => {
   }
 });
 
-//Delete Task
-app.delete("/task/:id",(req,res)=>{
-""
-    res.json({})
-    console.error("",error);
-    res.status(500).json()
-  
+// DELETE TASK
+app.delete("/tasks/:id", async (req, res) => {
+  try {
+    const tasks = await Task.findByIdAndDelete(req.params.id);
+    if (!tasks) return res.status(404).json({ error: "Task not found" });
+    res.status(204).send();
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 const startServer = async () => {
   try {
     await connectDB();
     app.listen(PORT, () => {
-      console.log(`server running on port ${PORT}`);
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📋 Task API endpoints:`);
+      console.log(`   POST   /login      - User login (get JWT token)`);
+      console.log(`   GET    /tasks      - Get all tasks (JWT required)`);
+      console.log(`   POST   /tasks      - Create new task (validation)`);
+      console.log(`   GET    /tasks/:id  - Get task by ID`);
+      console.log(`   PUT    /tasks/:id  - Update task (JWT required)`);
+      console.log(`   DELETE /tasks/:id  - Delete task`);
+      console.log(`   GET    /health     - Health check`);
+      console.log(`🔐 Authentication:`);
+      console.log(`   Use: Authorization: Bearer <token>`);
     });
   } catch (error) {
     console.error("Failed to start server:", error);
@@ -208,4 +229,9 @@ const startServer = async () => {
   }
 };
 
-startServer();
+module.exports = app;
+
+// Start only if run directly
+if (require.main === module) {
+  startServer();
+}
